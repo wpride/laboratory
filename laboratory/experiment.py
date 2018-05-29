@@ -3,6 +3,7 @@ from functools import wraps
 import logging
 import random
 import traceback
+import threading
 
 from laboratory import exceptions
 from laboratory.observation import Observation
@@ -133,32 +134,28 @@ class Experiment(object):
             """A lightweight wrapper around a tested function in order to retrieve state"""
             return lambda *a, **kw: (self._run_tested_func(raise_on_exception=is_control, **obs_def), is_control)
 
-        funcs = [
-            get_func_executor(self._control, is_control=True),
-        ] + [get_func_executor(cand, is_control=False,) for cand in self._candidates]
+        control = self._run_tested_func(raise_on_exception=True, **self._control)
+        funcs = [get_func_executor(cand, is_control=False,) for cand in self._candidates]
 
-        random.shuffle(funcs)
+        thr = threading.Thread(target=self.run_candidates, args=(control, funcs), kwargs={})
+        thr.start()
 
-        control = None
+        return control.value
+
+    def run_candidates(self, control, funcs):
         candidates = []
 
-        # go through the randomised list and execute the functions
         for func in funcs:
-            observation, is_control = func()
-            if is_control:
-                control = observation
-            else:
-                candidates.append(observation)
+            observation, _ = func()
+            candidates.append(observation)
 
         result = Result(self, control, candidates)
-
         try:
             self.publish(result)
         except Exception:
             msg = 'Exception occured when publishing %s experiment data'
             logger.exception(msg % self.name)
 
-        return control.value
 
     def enabled(self):
         '''
